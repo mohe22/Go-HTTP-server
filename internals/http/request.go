@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"strconv"
+
+	url "myserver/internals/utils"
 )
 
 type Method string
@@ -40,6 +42,7 @@ type Request struct {
 	Body        []byte
 	Headers     Header
 	status      ParseState
+	Params      url.Params
 }
 
 func NewRequestParser() *Request {

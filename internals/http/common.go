@@ -16,6 +16,7 @@ var (
 	ErrMethodNotFound       = errors.New("method not found")
 	ErrPathNotFound         = errors.New("path not found")
 
+	// HEADER
 	ErrKeyNotFound = errors.New("key not found in header")
 	ErrEmptyKey    = errors.New("key cannot be empty")
 )

@@ -2,10 +2,12 @@ package server
 
 import (
 	"fmt"
-	http "myserver/internals/http"
 	"net"
 	"strings"
 	"time"
+
+	http "myserver/internals/http"
+
 )
 
 type Server struct {
@@ -40,7 +42,7 @@ func handleConnection(conn net.Conn, s *Server) {
 			return
 		}
 
-		handler, err := s.FindRoute(req.RequestLine.Path, req.RequestLine.Method)
+		handler, params, err := s.FindRoute(req.RequestLine.Path, req.RequestLine.Method)
 		if err != nil {
 			fmt.Println(err)
 			if strings.Contains(err.Error(), "method not allowed") {
@@ -52,6 +54,7 @@ func handleConnection(conn net.Conn, s *Server) {
 			}
 			return
 		}
+		req.Params = params
 		if err := (*handler)(response, req); err != nil {
 			response.SendInternalServerError(err.Error())
 			return

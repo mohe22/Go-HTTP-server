@@ -2,7 +2,10 @@ package server
 
 import (
 	"fmt"
+	"strings"
+
 	http "myserver/internals/http"
+	url "myserver/internals/utils"
 )
 
 type RouteError struct {
@@ -24,16 +27,39 @@ func (s *Server) Handle(method http.Method, path string, handler Handler) {
 	s.routes[method][path] = handler
 }
 
-func (s *Server) FindRoute(path string, method http.Method) (*Handler, error) {
+// TODO: make sure the logic is working..
+func (s *Server) FindRoute(path string, method http.Method) (*Handler, url.Params, error) {
 	methodRoutes, ok := s.routes[method]
 	if !ok {
-		return nil, fmt.Errorf("method not allowed: %s", method)
+		return nil, nil, fmt.Errorf("method not allowed: %s", method)
 	}
 
-	handler, ok := methodRoutes[path]
-	if !ok {
-		return nil, fmt.Errorf("path not found: %s (method: %s)", path, method)
+	reqSegments := strings.Split(strings.Trim(path, "/"), "/")
+
+	for routePath, handler := range methodRoutes {
+		routeSegments := strings.Split(strings.Trim(routePath, "/"), "/")
+		if len(routeSegments) != len(reqSegments) {
+			continue
+		}
+
+		params := make(url.Params)
+		matched := true
+
+		for i, seg := range reqSegments {
+			rSeg := routeSegments[i]
+			if url.IsParam(rSeg) {
+				paramName := rSeg[1 : len(rSeg)-1]
+				params[paramName] = seg
+			} else if rSeg != seg {
+				matched = false
+				break
+			}
+		}
+
+		if matched {
+			return &handler, params, nil
+		}
 	}
 
-	return &handler, nil
+	return nil, nil, fmt.Errorf("path not found: %s (method: %s)", path, method)
 }
