@@ -1,9 +1,11 @@
 package main
 
 import (
-	"log"
+	"fmt"
 	http "myserver/internals/http"
 	internals "myserver/internals/server"
+
+	"log"
 	"net/url"
 	"os"
 	"os/signal"
@@ -23,14 +25,14 @@ func send(res *http.ResponseWriter, req *http.Request) *internals.RouteError {
 	}
 	return nil
 }
+
 func serveStatic(res *http.ResponseWriter, req *http.Request) *internals.RouteError {
-	// Map "/" to "/index.html"
+
 	path := req.RequestLine.Path
 	if path == "/" {
 		path = "/index.html"
 	}
 
-	// Full path on disk
 	fullPath := "/home/mohe/Documents/github/my-server/static" + path
 
 	err := res.SendFile(fullPath)
@@ -81,6 +83,12 @@ func handleLogin(res *http.ResponseWriter, req *http.Request) *internals.RouteEr
 	return nil
 }
 
+func Search(res *http.ResponseWriter, req *http.Request) *internals.RouteError {
+	d, _ := req.Params.Get("firstID")
+	fmt.Println(d)
+	return nil
+}
+
 func main() {
 	server, err := internals.ServeHTTP(port)
 	if err != nil {
@@ -91,6 +99,8 @@ func main() {
 
 	server.Handle(http.GET, "/", send)
 	server.Handle(http.GET, "/style.css", serveStatic)
+
+	server.Handle(http.GET, "/search/{firstID}/ds/{secondID}", Search)
 	server.Handle(http.GET, "/script.js", serveStatic)
 	server.Handle(http.POST, "/login", handleLogin)
 
