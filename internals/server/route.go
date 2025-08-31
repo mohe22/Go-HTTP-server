@@ -20,15 +20,25 @@ func (r *RouteError) Error() string {
 type Handler func(w *http.ResponseWriter, r *http.Request) *RouteError
 type Routes map[http.Method]map[string]Handler
 
-func (s *Server) Handle(method http.Method, path string, handler Handler) {
+type Middleware func(Handler) Handler
+
+func (s *Server) Handle(method http.Method, path string, middleware Middleware, handler Handler) {
+
 	if s.routes[method] == nil {
 		s.routes[method] = make(map[string]Handler)
 	}
+	if middleware != nil {
+		handler = middleware(handler)
+	}
+
 	s.routes[method][path] = handler
 }
 
 // TODO: make sure the logic is working..
 func (s *Server) FindRoute(path string, method http.Method) (*Handler, url.Params, error) {
+
+	url.CleanURL(&path)
+
 	methodRoutes, ok := s.routes[method]
 	if !ok {
 		return nil, nil, fmt.Errorf("method not allowed: %s", method)

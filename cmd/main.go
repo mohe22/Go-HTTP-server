@@ -89,6 +89,16 @@ func Search(res *http.ResponseWriter, req *http.Request) *internals.RouteError {
 	return nil
 }
 
+func LoggingMiddleware(next internals.Handler) internals.Handler {
+	return func(w *http.ResponseWriter, r *http.Request) *internals.RouteError {
+		log.Printf("[%s] %s\n", r.RequestLine.Method, r.RequestLine.Path)
+
+		// Call the next handler and return its result
+		return next(w, r)
+		// return nil  or error
+	}
+}
+
 func main() {
 	server, err := internals.ServeHTTP(port)
 	if err != nil {
@@ -97,12 +107,17 @@ func main() {
 	defer server.Close()
 	log.Println("Server running on: ", port)
 
-	server.Handle(http.GET, "/", send)
-	server.Handle(http.GET, "/style.css", serveStatic)
+	server.Handle(
+		http.GET,
+		"/",
+		LoggingMiddleware,
+		send,
+	)
+	server.Handle(http.GET, "/style.css", nil, serveStatic)
 
-	server.Handle(http.GET, "/search/{firstID}/ds/{secondID}", Search)
-	server.Handle(http.GET, "/script.js", serveStatic)
-	server.Handle(http.POST, "/login", handleLogin)
+	server.Handle(http.GET, "/search/{firstID}/ds/{secondID}", nil, Search)
+	server.Handle(http.GET, "/script.js", nil, serveStatic)
+	server.Handle(http.POST, "/login", nil, handleLogin)
 
 	// Graceful shutdown
 	sigChan := make(chan os.Signal, 1)
