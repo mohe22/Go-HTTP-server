@@ -17,6 +17,7 @@ func IsParam(segment string) bool {
 	return len(segment) >= 2 && segment[0] == '{' && segment[len(segment)-1] == '}'
 }
 
+// clean path from ? = &.
 func CleanURL(url *string) string {
 	if *url == "" {
 		return ""

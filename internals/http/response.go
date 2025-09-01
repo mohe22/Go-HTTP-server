@@ -2,57 +2,23 @@ package http
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
-	"io/ioutil"
+	types "myserver/internals/type"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
 
-type StatusCode int
-
-const (
-	OK                  StatusCode = 200
-	Created             StatusCode = 201
-	NoContent           StatusCode = 204
-	BadRequest          StatusCode = 400
-	Unauthorized        StatusCode = 401
-	Forbidden           StatusCode = 403
-	NotFound            StatusCode = 404
-	MethodNotAllowed    StatusCode = 405
-	InternalServerError StatusCode = 500
-)
-
-type ContentType string
-
-const (
-	TextPlain ContentType = "text/plain; charset=utf-8"
-	TextHTML  ContentType = "text/html; charset=utf-8"
-	AppJSON   ContentType = "application/json"
-	AppXML    ContentType = "application/xml"
-	AppOctet  ContentType = "application/octet-stream"
-	ImagePNG  ContentType = "image/png"
-	ImageJPEG ContentType = "image/jpeg"
-	ImageGIF  ContentType = "image/gif"
-)
-
-var statusText = map[StatusCode]string{
-	OK:                  "OK",
-	Created:             "Created",
-	NoContent:           "No Content",
-	BadRequest:          "Bad Request",
-	Unauthorized:        "Unauthorized",
-	Forbidden:           "Forbidden",
-	NotFound:            "Not Found",
-	MethodNotAllowed:    "Method Not Allowed",
-	InternalServerError: "Internal Server Error",
-}
-
 type ResponseWriter struct {
 	write       io.Writer
 	idleTimeout time.Duration
-	Version     Version
-	Status      StatusCode
+	isKeepAlive bool
+	Version     types.Version
+	Status      types.StatusCode
 	Headers     *Header
 }
 
@@ -60,14 +26,20 @@ func NewResponseWriter(w io.Writer, idleTimeout time.Duration) *ResponseWriter {
 	return &ResponseWriter{
 		write:       w,
 		idleTimeout: idleTimeout,
-		Version:     HTTP1_1,
-		Status:      OK,
+		isKeepAlive: false,
+		Version:     types.HTTP1_1,
+		Status:      types.OK,
 		Headers:     NewHeader(),
 	}
 }
+
+func (w *ResponseWriter) SetKeppAlive(isAlive bool) {
+	w.isKeepAlive = isAlive
+}
+
 func (w *ResponseWriter) WriteStatusLine() error {
 	code := w.Status
-	text, ok := statusText[code]
+	text, ok := types.StatusText[code]
 	if !ok {
 		return ErrUnknownStatusCode
 	}
@@ -90,123 +62,182 @@ func (w *ResponseWriter) WriteBody(data []byte) error {
 	_, err := w.write.Write(data)
 	return err
 }
-func detectContentType(data *[]byte) ContentType {
+func detectContentType(data *[]byte) types.ContentType {
 	if len(*data) == 0 {
-		return TextPlain
+		return types.TextPlain
 	}
 
 	trimmed := bytes.TrimSpace(*data)
 
 	// JSON detection
 	if len(trimmed) > 0 && (trimmed[0] == '{' || trimmed[0] == '[') {
-		return AppJSON
+		return types.AppJSON
 	}
 
 	// HTML detection
 	if bytes.HasPrefix(trimmed, []byte("<!DOCTYPE html")) ||
 		bytes.HasPrefix(trimmed, []byte("<html")) {
-		return TextHTML
+		return types.TextHTML
 	}
 
 	// Images detection by magic numbers
 	if len(*data) > 4 {
 		switch {
 		case (*data)[0] == 0x89 && bytes.HasPrefix((*data)[1:], []byte("PNG")):
-			return ImagePNG
+			return types.ImagePNG
 		case bytes.HasPrefix(*data, []byte{0xFF, 0xD8, 0xFF}):
-			return ImageJPEG
+			return types.ImageJPEG
 		case bytes.HasPrefix(*data, []byte("GIF87a")) || bytes.HasPrefix(*data, []byte("GIF89a")):
-			return ImageGIF
+			return types.ImageGIF
 		}
 	}
 
-	return AppOctet
+	return types.AppOctet
 }
-func (w *ResponseWriter) SendResponse(body []byte) error {
-	if _, exists := (*w.Headers)["Content-Length"]; !exists {
-		w.Headers.Set("Content-Length", fmt.Sprintf("%d", len(body)))
-	}
-	if _, exists := (*w.Headers)["Date"]; !exists {
-		w.Headers.Set("Date", time.Now().UTC().Format(time.RFC1123))
-	}
-	if _, exists := (*w.Headers)["Connection"]; !exists {
-		if w.Version == HTTP1_0 {
-			w.Headers.Set("Connection", "close")
-		} else {
-			w.Headers.Set("Connection", "keep-alive")
-			w.Headers.Set("Keep-Alive", fmt.Sprintf("timeout=%d", int(w.idleTimeout.Seconds())))
-		}
-	}
-	if _, exists := (*w.Headers)["Content-Type"]; !exists && len(body) > 0 {
-		ct := detectContentType(&body)
-		w.Headers.Set("Content-Type", string(ct))
-	}
-	if err := w.WriteStatusLine(); err != nil {
-		return err
-	}
-	if err := w.WriteHeader(); err != nil {
-		return err
-	}
-	if len(body) > 0 {
-		if err := w.WriteBody(body); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-func getContentTypeFromExtension(path string) ContentType {
+func getContentTypeFromExtension(path string) types.ContentType {
 	switch {
 	case strings.HasSuffix(path, ".html"):
-		return TextHTML
+		return types.TextHTML
 	case strings.HasSuffix(path, ".css"):
 		return "text/css; charset=utf-8"
 	case strings.HasSuffix(path, ".js"):
 		return "application/javascript; charset=utf-8"
 	case strings.HasSuffix(path, ".json"):
-		return AppJSON
+		return types.AppJSON
 	case strings.HasSuffix(path, ".xml"):
-		return AppXML
+		return types.AppXML
 	case strings.HasSuffix(path, ".jpg"), strings.HasSuffix(path, ".jpeg"):
-		return ImageJPEG
+		return types.ImageJPEG
 	case strings.HasSuffix(path, ".png"):
-		return ImagePNG
+		return types.ImagePNG
 	case strings.HasSuffix(path, ".gif"):
-		return ImageGIF
+		return types.ImageGIF
 	default:
-		return AppOctet
+		return types.AppOctet
 	}
 }
 
-func (w *ResponseWriter) SendFile(path string) error {
-	data, err := ioutil.ReadFile(path)
-	if err != nil {
-		return w.SendNotFound("File not found")
+func (w *ResponseWriter) SetDefaultHeaders(body *[]byte) {
+	// Content-Length
+	if _, exists := (*w.Headers)["Content-Length"]; !exists {
+		w.Headers.Set("Content-Length", strconv.Itoa(len(*body)))
 	}
 
-	// Use extension-based content type
-	ct := getContentTypeFromExtension(path)
-	w.Headers.Set("Content-Type", string(ct))
+	// Date
+	if _, exists := (*w.Headers)["Date"]; !exists {
+		w.Headers.Set("Date", time.Now().UTC().Format(time.RFC1123))
+	}
 
-	return w.SendResponse(data)
+	// Connection / Keep-Alive
+	if _, exists := (*w.Headers)["Connection"]; !exists {
+		if w.isKeepAlive {
+			w.Headers.Set("Connection", "keep-alive")
+			w.Headers.Set("Keep-Alive", fmt.Sprintf("timeout=%d", int(w.idleTimeout.Seconds())))
+		} else {
+			w.Headers.Set("Connection", "close")
+		}
+	}
+
+	// Content-Type
+	if len(*body) > 0 {
+		if _, exists := (*w.Headers)["Content-Type"]; !exists {
+			ct := detectContentType(body)
+			w.Headers.Set("Content-Type", string(ct))
+		}
+	}
+}
+
+func (w *ResponseWriter) SendResponse(body []byte) *types.RouteError {
+	w.SetDefaultHeaders(&body)
+
+	if err := w.WriteStatusLine(); err != nil {
+		return &types.RouteError{Code: types.InternalServerError, Message: err.Error()}
+	}
+	if err := w.WriteHeader(); err != nil {
+		return &types.RouteError{Code: types.InternalServerError, Message: err.Error()}
+	}
+	if len(body) > 0 {
+		if err := w.WriteBody(body); err != nil {
+			return &types.RouteError{Code: types.InternalServerError, Message: err.Error()}
+		}
+	}
+	return nil
+}
+func (w *ResponseWriter) SendFile(path string) *types.RouteError {
+	file, err := os.Open(path)
+
+	if err != nil {
+		return &types.RouteError{Code: types.NotFound, Message: "File not found"}
+	}
+	defer file.Close()
+
+	fi, err := file.Stat()
+	if err != nil {
+		return &types.RouteError{Code: types.InternalServerError, Message: "Failed to read file info"}
+	}
+
+	w.Headers.Set("Content-Length", strconv.FormatInt(fi.Size(), 10))
+	if _, exists := (*w.Headers)["Content-Type"]; !exists {
+		ct := getContentTypeFromExtension(filepath.Ext(path))
+		w.Headers.Set("Content-Type", string(ct))
+	}
+
+	if err := w.WriteStatusLine(); err != nil {
+		return &types.RouteError{Code: types.InternalServerError, Message: err.Error()}
+	}
+	if err := w.WriteHeader(); err != nil {
+		return &types.RouteError{Code: types.InternalServerError, Message: err.Error()}
+	}
+
+	if _, err := io.Copy(w.write, file); err != nil {
+		return &types.RouteError{Code: types.InternalServerError, Message: err.Error()}
+	}
+
+	return nil
+}
+
+func (w *ResponseWriter) SendJSON(data any, status types.StatusCode) *types.RouteError {
+	body, err := json.Marshal(data)
+	if err != nil {
+		w.Status = types.InternalServerError
+		return &types.RouteError{Code: types.InternalServerError, Message: "Failed to encode JSON"}
+	}
+
+	w.Status = status
+
+	return w.SendResponse(body)
 }
 
 // SendBadRequest sends a 400 Bad Request response
 func (w *ResponseWriter) SendBadRequest(message string) error {
-	w.Status = BadRequest
+	w.Status = types.BadRequest
 	body := []byte(message)
 	return w.SendResponse(body)
 }
 
 // SendNotFound sends a 404 Not Found response
 func (w *ResponseWriter) SendNotFound(message string) error {
-	w.Status = NotFound
+	w.Status = types.NotFound
 	body := []byte(message)
 	return w.SendResponse(body)
 }
 
 // SendInternalServerError sends a 500 Internal Server Error response
 func (w *ResponseWriter) SendInternalServerError(message string) error {
-	w.Status = InternalServerError
+	w.Status = types.InternalServerError
 	body := []byte(message)
 	return w.SendResponse(body)
+}
+func NotFoundHandler(w *ResponseWriter, r *Request) *types.RouteError {
+	return &types.RouteError{
+		Code:    types.NotFound,
+		Message: "Path Not Found",
+	}
+}
+
+func MethodNotAllowedHandler(w *ResponseWriter, r *Request) *types.RouteError {
+	return &types.RouteError{
+		Code:    types.MethodNotAllowed,
+		Message: "Method Not Allowed",
+	}
 }

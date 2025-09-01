@@ -1,48 +1,34 @@
 package server
 
 import (
-	"fmt"
 	"strings"
 
 	http "myserver/internals/http"
+	types "myserver/internals/type"
 	url "myserver/internals/utils"
 )
 
-type RouteError struct {
-	Code    http.StatusCode
-	Message string
-}
+type Handler func(w *http.ResponseWriter, r *http.Request) *types.RouteError
+type Routes map[types.Method]map[string]Handler
 
-func (r *RouteError) Error() string {
-	return r.Message
-}
-
-type Handler func(w *http.ResponseWriter, r *http.Request) *RouteError
-type Routes map[http.Method]map[string]Handler
-
-type Middleware func(Handler) Handler
-
-func (s *Server) Handle(method http.Method, path string, middleware Middleware, handler Handler) {
+func (s *Server) Handle(method types.Method, path string, handler Handler) {
 
 	if s.routes[method] == nil {
 		s.routes[method] = make(map[string]Handler)
-	}
-	if middleware != nil {
-		handler = middleware(handler)
 	}
 
 	s.routes[method][path] = handler
 }
 
 // TODO: make sure the logic is working..
-func (s *Server) FindRoute(path string, method http.Method) (*Handler, url.Params, error) {
-
-	url.CleanURL(&path)
+func (s *Server) FindRoute(path string, method types.Method) (Handler, url.Params) {
 
 	methodRoutes, ok := s.routes[method]
 	if !ok {
-		return nil, nil, fmt.Errorf("method not allowed: %s", method)
+		return http.MethodNotAllowedHandler, nil
 	}
+
+	url.CleanURL(&path)
 
 	reqSegments := strings.Split(strings.Trim(path, "/"), "/")
 
@@ -66,10 +52,10 @@ func (s *Server) FindRoute(path string, method http.Method) (*Handler, url.Param
 			}
 		}
 
-		if matched {
-			return &handler, params, nil
+		if matched && handler != nil {
+			return handler, nil
 		}
 	}
 
-	return nil, nil, fmt.Errorf("path not found: %s (method: %s)", path, method)
+	return http.NotFoundHandler, nil
 }

@@ -2,122 +2,109 @@ package main
 
 import (
 	"fmt"
-	http "myserver/internals/http"
-	internals "myserver/internals/server"
-
 	"log"
 	"net/url"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
+	"time"
+
+	http "myserver/internals/http"
+	internals "myserver/internals/server"
+	types "myserver/internals/type"
 )
 
 const port = 8080
+const staticDir = "/home/mohe/Documents/github/my-server/static"
 
-func send(res *http.ResponseWriter, req *http.Request) *internals.RouteError {
-	res.Status = http.OK
-	err := res.SendFile("/home/mohe/Documents/github/my-server/static/indx.html")
-	if err != nil {
-		return &internals.RouteError{
-			Code:    http.InternalServerError,
-			Message: "Something went wrong",
-		}
-	}
-	return nil
+// Serve root page
+func send(res *http.ResponseWriter, req *http.Request) *types.RouteError {
+	res.Status = types.OK
+	return res.SendFile(filepath.Join(staticDir, "indx.html"))
 }
 
-func serveStatic(res *http.ResponseWriter, req *http.Request) *internals.RouteError {
-
+// Serve static files
+func serveStatic(res *http.ResponseWriter, req *http.Request) *types.RouteError {
 	path := req.RequestLine.Path
-	if path == "/" {
+	if path == "/" || path == "." {
 		path = "/index.html"
 	}
 
-	fullPath := "/home/mohe/Documents/github/my-server/static" + path
+	fullPath := filepath.Join(staticDir, path)
+	res.Status = types.OK
 
-	err := res.SendFile(fullPath)
-	if err != nil {
-		return &internals.RouteError{
-			Code:    http.InternalServerError,
-			Message: "Failed to serve file",
-		}
-	}
-	return nil
+	return res.SendFile(fullPath)
 }
 
-func handleLogin(res *http.ResponseWriter, req *http.Request) *internals.RouteError {
-	// Parse body (assumes application/x-www-form-urlencoded)
+// Handle login with simple logic
+func handleLogin(res *http.ResponseWriter, req *http.Request) *types.RouteError {
+
 	values, err := url.ParseQuery(string(req.Body))
 	if err != nil {
-		return &internals.RouteError{
-			Code:    http.BadRequest,
-			Message: "Invalid form data",
-		}
+		res.Status = types.BadRequest
+		return &types.RouteError{Code: types.BadRequest, Message: "Invalid form data"}
 	}
 
 	username := values.Get("username")
 	password := values.Get("password")
 
-	// Simple login logic
-
 	if username == "admin" && password == "1234" {
-		res.Status = http.OK
-		res.Headers.Set("Content-Type", string(http.AppJSON))
-		if err := res.SendResponse([]byte(`{"status":"success","message":"Login successful"}`)); err != nil {
-			return &internals.RouteError{
-				Code:    http.InternalServerError,
-				Message: "Failed to send response",
-			}
-		}
-	} else {
-		res.Status = http.Unauthorized
-		res.Headers.Set("Content-Type", string(http.AppJSON))
-		if err := res.SendResponse([]byte(`{"status":"error","message":"Invalid credentials"}`)); err != nil {
-			return &internals.RouteError{
-				Code:    http.InternalServerError,
-				Message: "Failed to send response",
-			}
-		}
+		return res.SendJSON(map[string]string{
+			"status":  "success",
+			"message": "Login successful",
+		}, types.OK)
 	}
 
-	return nil
+	return res.SendJSON(map[string]string{
+		"status":  "error",
+		"message": "Invalid credentials",
+	}, types.Unauthorized)
 }
 
-func Search(res *http.ResponseWriter, req *http.Request) *internals.RouteError {
-	d, _ := req.Params.Get("firstID")
-	fmt.Println(d)
+// Example route with params
+func Search(res *http.ResponseWriter, req *http.Request) *types.RouteError {
+	firstID, _ := req.Params.Get("firstID")
+	secondID, _ := req.Params.Get("secondID")
+	fmt.Println("FirstID:", firstID, "SecondID:", secondID)
 	return nil
 }
 
 func LoggingMiddleware(next internals.Handler) internals.Handler {
-	return func(w *http.ResponseWriter, r *http.Request) *internals.RouteError {
-		log.Printf("[%s] %s\n", r.RequestLine.Method, r.RequestLine.Path)
-
-		// Call the next handler and return its result
+	return func(w *http.ResponseWriter, r *http.Request) *types.RouteError {
+		log.Printf("[%s] %s %s\n", r.RequestLine.Method, r.RequestLine.Path, r.RequestLine.Version)
 		return next(w, r)
-		// return nil  or error
 	}
 }
 
+// Info endpoint
+func handleInfo(res *http.ResponseWriter, req *http.Request) *types.RouteError {
+	data := map[string]any{
+		"status":  "success",
+		"message": "Server is running",
+		"time":    time.Now().Format(time.RFC3339),
+	}
+	return res.SendJSON(data, types.OK)
+}
+
+// Main function
 func main() {
 	server, err := internals.ServeHTTP(port)
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer server.Close()
-	log.Println("Server running on: ", port)
+	log.Println("Server running on:", port)
 
-	server.Handle(
-		http.GET,
-		"/",
-		LoggingMiddleware,
-		send,
-	)
-	server.Handle(http.GET, "/style.css", nil, serveStatic)
+	server.Use(LoggingMiddleware)
 
-	server.Handle(http.GET, "/search/{firstID}/ds/{secondID}", nil, Search)
-	server.Handle(http.GET, "/script.js", nil, serveStatic)
-	server.Handle(http.POST, "/login", nil, handleLogin)
+	// Routes with middleware
+	server.Handle(types.GET, "/", send)
+	server.Handle(types.GET, "/style.css", serveStatic)
+	server.Handle(types.GET, "/script.js", serveStatic)
+	server.Handle(types.GET, "/search/{firstID}/ds/{secondID}", Search)
+	server.Handle(types.GET, "/api/info", handleInfo)
+	server.Handle(types.POST, "/login", handleLogin)
 
 	// Graceful shutdown
 	sigChan := make(chan os.Signal, 1)

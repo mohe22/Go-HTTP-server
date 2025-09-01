@@ -6,64 +6,46 @@ import (
 	"fmt"
 	"io"
 	"strconv"
+	"strings"
 
+	types "myserver/internals/type"
 	url "myserver/internals/utils"
 )
 
-type Method string
-type ParseState string
-
-const (
-	GET     Method = "GET"
-	POST    Method = "POST"
-	PUT     Method = "PUT"
-	DELETE  Method = "DELETE"
-	HEAD    Method = "HEAD"
-	OPTIONS Method = "OPTIONS"
-	PATCH   Method = "PATCH"
-	CONNECT Method = "CONNECT"
-	TRACE   Method = "TRACE"
-)
-
-const (
-	StateRequestLine ParseState = "RequestLine"
-	StateHeader      ParseState = "Header"
-	StateBody        ParseState = "Body"
-	StateDone        ParseState = "Done"
-)
-
 type RequestLine struct {
-	Method  Method
+	Method  types.Method
 	Path    string
-	Version Version
+	Version types.Version
 }
 type Request struct {
 	RequestLine RequestLine
 	Body        []byte
 	Headers     Header
-	status      ParseState
+	status      types.ParseState
 	Params      url.Params
 }
 
 func NewRequestParser() *Request {
 	return &Request{
-		status:  StateRequestLine,
+		status:  types.StateRequestLine,
 		Body:    nil,
 		Headers: make(Header),
 	}
 }
-func parseMethod(data []byte) (Method, error) {
-	switch {
-	case bytes.Equal(data, []byte(GET)):
-		return GET, nil
-	case bytes.Equal(data, []byte(POST)):
-		return POST, nil
-	case bytes.Equal(data, []byte(DELETE)):
-		return DELETE, nil
-	case bytes.Equal(data, []byte(PUT)):
-		return PUT, nil
+
+func (req *Request) IsKeepAlive() bool {
+	switch req.RequestLine.Version {
+	case types.HTTP1_0:
+		conn, _ := req.Headers.Get("Connection")
+		return conn != "" && strings.EqualFold(conn, "keep-alive")
+	case types.HTTP1_1:
+		conn, _ := req.Headers.Get("Connection")
+		return conn == "" || !strings.EqualFold(conn, "close")
+	case types.HTTP2:
+		return true
 	default:
-		return "", fmt.Errorf("%w: %q", ErrInvalidRequestMethod, data)
+		// fallback: close connection
+		return false
 	}
 }
 
@@ -79,11 +61,11 @@ func (req *Request) parseRequestLine(data []byte) (int, error) {
 	if len(parts) != 3 {
 		return 0, fmt.Errorf("%w: expected 3 parts, got %d", ErrInvalidRequestLine, len(parts))
 	}
-	method, err := parseMethod(parts[0])
+	method, err := types.ParseMethod(parts[0])
 	if err != nil {
 		return 0, err
 	}
-	version, err := parseVersion(parts[2])
+	version, err := types.ParseVersion(parts[2])
 	if err != nil {
 		return 0, err
 	}
@@ -123,7 +105,7 @@ func (req *Request) parsing(data []byte) (int, error) {
 	for {
 		currentData := data[consumed:]
 		switch req.status {
-		case StateRequestLine:
+		case types.StateRequestLine:
 			reqLen, err := req.parseRequestLine(currentData)
 
 			if err != nil {
@@ -134,8 +116,8 @@ func (req *Request) parsing(data []byte) (int, error) {
 			}
 
 			consumed += reqLen
-			req.status = StateHeader
-		case StateHeader:
+			req.status = types.StateHeader
+		case types.StateHeader:
 			headerLen, err := req.parseRequestHeader(currentData)
 			if err != nil {
 				return consumed, err
@@ -144,15 +126,15 @@ func (req *Request) parsing(data []byte) (int, error) {
 				return consumed, nil
 			}
 			consumed += headerLen
-			req.status = StateBody
-		case StateBody:
+			req.status = types.StateBody
+		case types.StateBody:
 			length, err := req.Headers.Get("Content-Length")
 			if err != nil {
-				req.status = StateDone
+				req.status = types.StateDone
 			}
 			n, err := strconv.Atoi(length)
 			if err != nil || n == 0 {
-				req.status = StateDone
+				req.status = types.StateDone
 			}
 			readLength := min(n-len(req.Body), len(currentData))
 			if readLength == 0 {
@@ -163,9 +145,9 @@ func (req *Request) parsing(data []byte) (int, error) {
 			req.Body = append(req.Body, currentData...)
 			consumed += readLength
 			if len(req.Body) >= n {
-				req.status = StateDone
+				req.status = types.StateDone
 			}
-		case StateDone:
+		case types.StateDone:
 			return consumed, nil
 		}
 	}
@@ -174,7 +156,7 @@ func ParseRequest(reader io.Reader) (*Request, error) {
 	buff := make([]byte, DefaultBufferSize)
 	req := NewRequestParser()
 	buffLen := 0
-	for req.status != StateDone {
+	for req.status != types.StateDone {
 
 		bytesRead, err := reader.Read(buff[buffLen:])
 		if err != nil {
@@ -186,7 +168,7 @@ func ParseRequest(reader io.Reader) (*Request, error) {
 		if err != nil {
 			// if the error EOF. change the status to Done
 			if errors.Is(err, io.EOF) {
-				req.status = StateDone
+				req.status = types.StateDone
 				break
 			}
 			return nil, err

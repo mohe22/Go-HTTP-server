@@ -3,32 +3,35 @@ package server
 import (
 	"fmt"
 	"net"
-	"strings"
 	"time"
 
 	http "myserver/internals/http"
-
+	types "myserver/internals/type"
 )
 
 type Server struct {
 	closed      bool
 	listener    net.Listener
 	idleTimeout time.Duration
+	middlewares *MiddlewareChain
 	routes      Routes
 }
 
-func NewServer() *Server {
+func NewServer(keepAlive time.Duration) *Server {
 	return &Server{
 		closed:      false,
-		idleTimeout: 10 * time.Second,
+		idleTimeout: keepAlive,
+		middlewares: NewMiddlewareChain(),
 		routes:      make(Routes),
 	}
 }
 
+func (s *Server) Use(middleware Middleware) {
+	s.middlewares.Use(middleware)
+}
+
 func handleConnection(conn net.Conn, s *Server) {
-	defer func() {
-		_ = conn.Close()
-	}()
+	defer conn.Close()
 
 	for {
 		if s.idleTimeout > 0 {
@@ -38,25 +41,29 @@ func handleConnection(conn net.Conn, s *Server) {
 		req, err := http.ParseRequest(conn)
 		response := http.NewResponseWriter(conn, s.idleTimeout)
 		if err != nil {
-			response.SendBadRequest("Method Not Allowed")
+			response.SendBadRequest(err.Error())
 			return
 		}
 
-		handler, params, err := s.FindRoute(req.RequestLine.Path, req.RequestLine.Method)
-		if err != nil {
-			fmt.Println(err)
-			if strings.Contains(err.Error(), "method not allowed") {
-				response.SendBadRequest("Method Not Allowed")
-			} else if strings.Contains(err.Error(), "path not found") {
-				response.SendNotFound("Path Not Found")
-			} else {
-				response.SendInternalServerError("Internal Server Error")
-			}
-			return
-		}
+		handler, params := s.FindRoute(req.RequestLine.Path, req.RequestLine.Method)
+
+		finalHandler := s.middlewares.Apply(handler)
+
 		req.Params = params
-		if err := (*handler)(response, req); err != nil {
-			response.SendInternalServerError(err.Error())
+		keepAlive := req.IsKeepAlive()
+		response.SetKeppAlive(keepAlive)
+
+		if routeErr := finalHandler(response, req); routeErr != nil {
+			switch routeErr.Code {
+			case types.NotFound:
+				response.SendNotFound(routeErr.Message)
+			case types.MethodNotAllowed:
+				response.SendBadRequest(routeErr.Message)
+			default:
+				response.SendInternalServerError(routeErr.Message)
+			}
+		}
+		if !keepAlive {
 			return
 		}
 	}
@@ -80,7 +87,7 @@ func (s *Server) acceptor() {
 }
 
 func ServeHTTP(port uint16) (*Server, error) {
-	server := NewServer()
+	server := NewServer(10 * time.Second)
 	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
 	if err != nil {
 		return nil, err
@@ -91,10 +98,8 @@ func ServeHTTP(port uint16) (*Server, error) {
 }
 
 func (s *Server) Close() error {
-	// set closed flag first
 	s.closed = true
 
-	// close listener to unblock Accept()
 	if s.listener != nil {
 		_ = s.listener.Close()
 	}

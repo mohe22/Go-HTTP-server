@@ -1,7 +1,8 @@
-package http
+package types
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 )
 
@@ -12,6 +13,8 @@ const (
 	HTTP1_0 Version = "HTTP/1.0"
 	HTTP2   Version = "HTTP/2"
 )
+
+var ErrUnsupportedVersion = errors.New("unsupported HTTP version")
 
 func (v *Version) String() string {
 	switch *v {
@@ -25,9 +28,10 @@ func (v *Version) String() string {
 		return "HTTP/1.1"
 	}
 }
-
-func parseVersion(data []byte) (Version, error) {
+func ParseVersion(data []byte) (Version, error) {
 	switch {
+	case bytes.Equal(data, []byte(HTTP1_0)):
+		return HTTP1_0, nil
 	case bytes.Equal(data, []byte(HTTP1_1)):
 		return HTTP1_1, nil
 	case bytes.Equal(data, []byte(HTTP2)):
